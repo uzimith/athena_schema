@@ -30,7 +30,7 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-const usageText = `struct-athena
+const usageText = `athena-schema
 Example:
-	struct-athena -source=foo.go [other options]
+	athena-schema -source=foo.go [other options]
 `
