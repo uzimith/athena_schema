@@ -238,16 +238,27 @@ func (f *File) createTable(node ast.Node) bool {
 			name := CamelToSnake(field.Names[0].Name)
 			fieldType := types.ExprString(field.Type)
 
+			sqlType, supportedType := SQLTypeMap[fieldType]
+
+			// overwirte by tags
 			if field.Tag != nil {
-				jsonTag, ok := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1]).Lookup("json")
+				tags := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1])
+				jsonTag, ok := tags.Lookup("json")
 				if ok {
 					name = jsonTag
+				}
+
+				athenaType, ok := tags.Lookup("athena")
+				if ok {
+					sqlType = athenaType
+				} else if !supportedType {
+					log.Printf("no support field type: %s", fieldType)
 				}
 			}
 
 			column := Column{
 				Name: name,
-				Type: fieldType,
+				Type: sqlType,
 			}
 
 			table.Columns = append(table.Columns, column)
@@ -288,7 +299,22 @@ func (g *Generator) format(templatePath string) []byte {
 	return tplcontent
 }
 
-var SQLTypeMap = map[string]string{}
+var SQLTypeMap = map[string]string{
+	"bool":      "BOOLEAN",
+	"string":    "STRING",
+	"int":       "INT",
+	"int8":      "INT",
+	"int16":     "INT",
+	"int32":     "INT",
+	"int64":     "INT",
+	"uint8":     "INT",
+	"uint16":    "INT",
+	"uint32":    "INT",
+	"uint64":    "INT",
+	"float32":   "FLOAT",
+	"float64":   "DOUBLE",
+	"time.Time": "timestamp",
+}
 
 func CamelToSnake(s string) string {
 	var result string
