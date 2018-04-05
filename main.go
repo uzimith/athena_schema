@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"unicode"
 )
@@ -234,18 +235,21 @@ func (f *File) createTable(node ast.Node) bool {
 		}
 
 		for _, field := range structType.Fields.List {
-			fieldName := field.Names[0].Name
+			name := CamelToSnake(field.Names[0].Name)
 			fieldType := types.ExprString(field.Type)
 
-			// tagValue := ""
-			// if field.Tag != nil {
-			// 	tagValue = field.Tag.Value
-			// }
+			if field.Tag != nil {
+				jsonTag, ok := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1]).Lookup("json")
+				if ok {
+					name = jsonTag
+				}
+			}
 
 			column := Column{
-				Name: CamelToSnake(fieldName),
+				Name: name,
 				Type: fieldType,
 			}
+
 			table.Columns = append(table.Columns, column)
 		}
 		f.tables = append(f.tables, table)
