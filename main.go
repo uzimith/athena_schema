@@ -10,7 +10,6 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,13 +17,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"text/template"
 	"unicode"
 )
 
 var (
 	typeNames    = flag.String("type", "", "comma-separated list of type names; must be set")
 	output       = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
-	templatePath = flag.String("template", "./templates/presto.tpl", "template file")
+	templatePath = flag.String("template", "./templates/template.tpl", "template file")
 )
 
 func Usage() {
@@ -229,43 +229,115 @@ func (f *File) createTable(node ast.Node) bool {
 
 		structType, ok := typeSpec.Type.(*ast.StructType)
 
-		table := Table{
-			Name:    CamelToSnake(structName),
-			Columns: make([]Column, 0, len(structType.Fields.List)),
+		if !ok {
+			log.Fatalf("specifed type is not struct: %s", structName)
 		}
 
-		for _, field := range structType.Fields.List {
-			name := CamelToSnake(field.Names[0].Name)
-			fieldType := types.ExprString(field.Type)
+		columns, ok := genCoulmns(structType.Fields.List)
 
-			sqlType, supportedType := SQLTypeMap[fieldType]
+		if !ok {
+			log.Fatalf("no support field type: %s", types.ExprString(typeSpec.Type))
+		}
 
-			// overwirte by tags
-			if field.Tag != nil {
-				tags := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1])
-				jsonTag, ok := tags.Lookup("json")
-				if ok {
-					name = jsonTag
-				}
-
-				athenaType, ok := tags.Lookup("athena")
-				if ok {
-					sqlType = athenaType
-				} else if !supportedType {
-					log.Printf("no support field type: %s", fieldType)
-				}
-			}
-
-			column := Column{
-				Name: name,
-				Type: sqlType,
-			}
-
-			table.Columns = append(table.Columns, column)
+		table := Table{
+			Name:    CamelToSnake(structName),
+			Columns: columns,
 		}
 		f.tables = append(f.tables, table)
 	}
 	return false
+}
+
+func genCoulmns(fields []*ast.Field) ([]Column, bool) {
+	columns := make([]Column, 0, len(fields))
+	for _, field := range fields {
+		name := CamelToSnake(field.Names[0].Name)
+		sqlType := ""
+
+		// overwirte by tags
+		if field.Tag != nil {
+			tags := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1])
+			jsonTag, ok := tags.Lookup("json")
+			if ok {
+				name = jsonTag
+			}
+
+			athenaType, ok := tags.Lookup("athena")
+			if ok {
+				sqlType = athenaType
+			}
+		}
+
+		if sqlType == "" {
+			sqlTypeByFieldType, ok := genSqlType(field.Type)
+			if ok {
+				sqlType = sqlTypeByFieldType
+			}
+		}
+
+		column := Column{
+			Name: name,
+			Type: sqlType,
+		}
+		columns = append(columns, column)
+	}
+	return columns, true
+}
+
+func genSqlType(fieldType ast.Expr) (string, bool) {
+	// array
+	arrayType, ok := fieldType.(*ast.ArrayType)
+	if ok {
+		typeStr, ok := genSqlType(arrayType.Elt)
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("array<%s>", typeStr), true
+	}
+
+	// struct
+	ident, ok := fieldType.(*ast.Ident)
+	if ok && ident.Obj != nil {
+		typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec)
+
+		if !ok {
+			return "", false
+		}
+
+		structType, ok := typeSpec.Type.(*ast.StructType)
+
+		if !ok {
+			return "", false
+		}
+
+		columns, ok := genCoulmns(structType.Fields.List)
+
+		if !ok {
+			return "", false
+		}
+
+		columnStrs := make([]string, 0, len(columns))
+
+		for _, column := range columns {
+			columnStrs = append(columnStrs, fmt.Sprintf("%s: %s", column.Name, column.Type))
+		}
+
+		return fmt.Sprintf("struct<%s>", strings.Join(columnStrs, ", ")), true
+	}
+
+	typeStr := types.ExprString(fieldType)
+	sqlType, ok := SQLTypeMap[typeStr]
+	if ok {
+		return sqlType, true
+	}
+
+	return "", false
+}
+
+var tmplFuncs = template.FuncMap{
+	"last": func(x int, a interface{}) bool {
+		return x == reflect.ValueOf(a).Len()-1
+	},
 }
 
 type Tmpl struct {
@@ -275,10 +347,11 @@ type Tmpl struct {
 }
 
 func (g *Generator) format(templatePath string) []byte {
-	tmpl, err := template.ParseFiles(templatePath)
+	tname := filepath.Base(templatePath)
+	tmpl, err := template.New(tname).Funcs(tmplFuncs).ParseFiles(templatePath)
 
 	if err != nil {
-		log.Fatalf("Template %v path is not exist", templatePath)
+		log.Fatalf("Template %v parse error: %s", templatePath, err.Error())
 	}
 
 	newbytes := bytes.NewBufferString("")
@@ -300,19 +373,19 @@ func (g *Generator) format(templatePath string) []byte {
 }
 
 var SQLTypeMap = map[string]string{
-	"bool":      "BOOLEAN",
-	"string":    "STRING",
-	"int":       "INT",
-	"int8":      "INT",
-	"int16":     "INT",
-	"int32":     "INT",
-	"int64":     "INT",
-	"uint8":     "INT",
-	"uint16":    "INT",
-	"uint32":    "INT",
-	"uint64":    "INT",
-	"float32":   "FLOAT",
-	"float64":   "DOUBLE",
+	"bool":      "boolean",
+	"string":    "string",
+	"int":       "int",
+	"int8":      "int",
+	"int16":     "int",
+	"int32":     "int",
+	"int64":     "int",
+	"uint8":     "int",
+	"uint16":    "int",
+	"uint32":    "int",
+	"uint64":    "int",
+	"float32":   "float",
+	"float64":   "double",
 	"time.Time": "timestamp",
 }
 

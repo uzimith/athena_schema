@@ -9,7 +9,8 @@ type User struct {
 }
 
 type Comment struct {
-	text string
+	text   string
+	Author User `test:"" json:"author_info"`
 }
 
 type Post struct {

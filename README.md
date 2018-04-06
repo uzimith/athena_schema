@@ -3,7 +3,7 @@
 Generate an athena (presto) table definition from a golang strcut.
 
 ```
-athena_schema -type=User,Post
+athena_schema -type=User,Post ./fixture/
 ```
 
 This applicatio need a template file to run this command.
@@ -17,9 +17,3 @@ type Post struct {
 	UpdatedAt string    `athena:"timestamp"` # type overwrite by athena struct tag
 }
 ```
-
-## Task
-
-* map support
-* array support
-* struct support
