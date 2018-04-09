@@ -233,11 +233,7 @@ func (f *File) createTable(node ast.Node) bool {
 			log.Fatalf("specifed type is not struct: %s", structName)
 		}
 
-		columns, ok := genCoulmns(structType.Fields.List)
-
-		if !ok {
-			log.Fatalf("no support field type: %s", types.ExprString(typeSpec.Type))
-		}
+		columns := genCoulmns(structType.Fields.List)
 
 		table := Table{
 			Name:    CamelToSnake(structName),
@@ -248,7 +244,7 @@ func (f *File) createTable(node ast.Node) bool {
 	return false
 }
 
-func genCoulmns(fields []*ast.Field) ([]Column, bool) {
+func genCoulmns(fields []*ast.Field) []Column {
 	columns := make([]Column, 0, len(fields))
 	for _, field := range fields {
 		name := CamelToSnake(field.Names[0].Name)
@@ -272,6 +268,8 @@ func genCoulmns(fields []*ast.Field) ([]Column, bool) {
 			sqlTypeByFieldType, ok := genSqlType(field.Type)
 			if ok {
 				sqlType = sqlTypeByFieldType
+			} else {
+				log.Fatalf("no support field type: %s", types.ExprString(field.Type))
 			}
 		}
 
@@ -281,7 +279,7 @@ func genCoulmns(fields []*ast.Field) ([]Column, bool) {
 		}
 		columns = append(columns, column)
 	}
-	return columns, true
+	return columns
 }
 
 func genSqlType(fieldType ast.Expr) (string, bool) {
@@ -310,11 +308,7 @@ func genSqlType(fieldType ast.Expr) (string, bool) {
 			return "", false
 		}
 
-		columns, ok := genCoulmns(structType.Fields.List)
-
-		if !ok {
-			return "", false
-		}
+		columns := genCoulmns(structType.Fields.List)
 
 		columnStrs := make([]string, 0, len(columns))
 
