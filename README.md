@@ -5,13 +5,14 @@ Generate an athena (presto) table definition from a golang strcut.
 ## Install
 
 ```
-go get github.com/uzimith/athena-schema/cmd/athena-schema
+go get github.com/uzimith/athena_schema/cmd/athena_schema
 ```
 
 ## Usage
 
 ```
-athena_schema -type=User,Post ./fixture/
+cd fixture
+athena_schema -type=User,Post
 ```
 
 This applicatio need a template file to run this command.

@@ -24,7 +24,7 @@ import (
 var (
 	typeNames    = flag.String("type", "", "comma-separated list of type names; must be set")
 	output       = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
-	templatePath = flag.String("template", "./templates/template.tpl", "template file")
+	templatePath = flag.String("template", ".", "template file: {templatePath}/templates/template.tpl")
 )
 
 func Usage() {
@@ -356,8 +356,9 @@ type Tmpl struct {
 }
 
 func (g *Generator) format(templatePath string) []byte {
-	tname := filepath.Base(templatePath)
-	tmpl, err := template.New(tname).Funcs(tmplFuncs).ParseFiles(templatePath)
+	templateFile := fmt.Sprintf("%s/templates/template.tpl", templatePath)
+	tname := filepath.Base(templateFile)
+	tmpl, err := template.New(tname).Funcs(tmplFuncs).ParseFiles(templateFile)
 
 	if err != nil {
 		log.Fatalf("Template %v parse error: %s", templatePath, err.Error())
