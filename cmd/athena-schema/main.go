@@ -255,7 +255,8 @@ func genCoulmns(fields []*ast.Field) []Column {
 			tags := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1])
 			jsonTag, ok := tags.Lookup("json")
 			if ok {
-				name = jsonTag
+				jsonTags := strings.Split(jsonTag, ",")
+				name = jsonTags[0]
 			}
 
 			athenaType, ok := tags.Lookup("athena")
@@ -317,6 +318,20 @@ func genSqlType(fieldType ast.Expr) (string, bool) {
 		}
 
 		return fmt.Sprintf("struct<%s>", strings.Join(columnStrs, ", ")), true
+	}
+	// map
+	mapType, ok := fieldType.(*ast.MapType)
+	if ok {
+		key, ok := mapType.Key.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+
+		value, ok := genSqlType(mapType.Value)
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("map<%s, %s>", key.Name, value), true
 	}
 
 	typeStr := types.ExprString(fieldType)
