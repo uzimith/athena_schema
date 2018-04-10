@@ -198,7 +198,11 @@ func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
 	}
 	typesPkg, err := config.Check(pkg.dir, fs, astFiles, pkg.info)
 	if err != nil {
-		log.Fatalf("checking package: %s", err)
+		if typesErr, ok := err.(types.Error); ok {
+			log.Printf("checking package: soft: %v error:%s", typesErr.Soft, typesErr.Error())
+		} else {
+			log.Printf("checking package: %s", err.Error())
+		}
 	}
 	pkg.typesPkg = typesPkg
 }
