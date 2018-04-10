@@ -1,6 +1,7 @@
 package fixture
 
 import (
+	"net/http"
 	"time"
 )
 
@@ -16,10 +17,12 @@ type Comment struct {
 }
 
 type Post struct {
-	Author    User      `test:"" json:"author_info"`
-	Comments  []Comment `json:"comments"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt string    `athena:"timestamp"`
+	Author      User       `test:"" json:"author_info"`
+	Comments    []Comment  `json:"comments"`
+	TwoComments [2]Comment `json:"two_comments"`
+	Tags        *[]*string `json:"tags"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   string     `athena:"timestamp"`
 }
 
 type HttpLog struct {
@@ -36,7 +39,7 @@ type Request struct {
 }
 
 type Response struct {
-	StatusCode   int                 `json:"status_code"`
-	HTTPHeader   map[string][]string `json:"http_header"`
-	ResponseBody string              `json:"response_body"`
+	StatusCode   int         `json:"status_code"`
+	HTTPHeader   http.Header `json:"http_header"`
+	ResponseBody string      `json:"response_body"`
 }

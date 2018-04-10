@@ -14,6 +14,8 @@ LOCATION 's3://bucket/user'
 CREATE EXTERNAL TABLE IF NOT EXISTS `post` (
   `author_info` struct<user_id: int, name: string>,
   `comments` array<struct<text: string, author_info: struct<user_id: int, name: string>>>,
+  `two_comments` array<struct<text: string, author_info: struct<user_id: int, name: string>>>,
+  `tags` array<string>,
   `created_at` timestamp,
   `updated_at` timestamp
 ) PARTITIONED BY (

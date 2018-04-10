@@ -118,12 +118,13 @@ type Column struct {
 type Package struct {
 	dir      string
 	name     string
-	defs     map[*ast.Ident]types.Object
+	info     *types.Info
 	files    []*File
 	typesPkg *types.Package
 }
 
 type File struct {
+	pkg *Package
 	ast *ast.File
 
 	// state for each type
@@ -174,6 +175,7 @@ func (g *Generator) parsePackage(directory string, names []string, text interfac
 		}
 		astFiles = append(astFiles, parsedFile)
 		files = append(files, &File{
+			pkg: g.pkg,
 			ast: parsedFile,
 		})
 	}
@@ -188,12 +190,13 @@ func (g *Generator) parsePackage(directory string, names []string, text interfac
 }
 
 func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
-	pkg.defs = make(map[*ast.Ident]types.Object)
 	config := types.Config{Importer: importer.Default(), FakeImportC: true}
-	info := &types.Info{
-		Defs: pkg.defs,
+	pkg.info = &types.Info{
+		Types: make(map[ast.Expr]types.TypeAndValue),
+		Defs:  make(map[*ast.Ident]types.Object),
+		Uses:  make(map[*ast.Ident]types.Object),
 	}
-	typesPkg, err := config.Check(pkg.dir, fs, astFiles, info)
+	typesPkg, err := config.Check(pkg.dir, fs, astFiles, pkg.info)
 	if err != nil {
 		log.Fatalf("checking package: %s", err)
 	}
@@ -222,18 +225,22 @@ func (f *File) createTable(node ast.Node) bool {
 		if !ok {
 			return true
 		}
-		structName := typeSpec.Name.Name
+		object := f.pkg.info.ObjectOf(typeSpec.Name)
+		if object == nil {
+			return true
+		}
+		structName := object.Name()
 		if structName != f.typeName {
 			return true
 		}
 
-		structType, ok := typeSpec.Type.(*ast.StructType)
+		structType, ok := object.Type().Underlying().(*types.Struct)
 
 		if !ok {
 			log.Fatalf("specifed type is not struct: %s", structName)
 		}
 
-		columns := genCoulmns(structType.Fields.List)
+		columns := f.genCoulmns(structType)
 
 		table := Table{
 			Name:    CamelToSnake(structName),
@@ -244,33 +251,35 @@ func (f *File) createTable(node ast.Node) bool {
 	return false
 }
 
-func genCoulmns(fields []*ast.Field) []Column {
-	columns := make([]Column, 0, len(fields))
-	for _, field := range fields {
-		name := CamelToSnake(field.Names[0].Name)
+func (f *File) genCoulmns(fields *types.Struct) []Column {
+	columns := make([]Column, 0, fields.NumFields())
+	for i := 0; i < fields.NumFields(); i++ {
+		field := fields.Field(i)
+		tags := reflect.StructTag(fields.Tag(i))
+		name := CamelToSnake(field.Name())
 		sqlType := ""
 
-		// overwirte by tags
-		if field.Tag != nil {
-			tags := reflect.StructTag(field.Tag.Value[1 : len(field.Tag.Value)-1])
-			jsonTag, ok := tags.Lookup("json")
-			if ok {
-				jsonTags := strings.Split(jsonTag, ",")
-				name = jsonTags[0]
-			}
+		jsonTag, ok := tags.Lookup("json")
+		if ok {
+			jsonTags := strings.Split(jsonTag, ",")
+			name = jsonTags[0]
+		}
 
-			athenaType, ok := tags.Lookup("athena")
-			if ok {
-				sqlType = athenaType
-			}
+		athenaType, ok := tags.Lookup("athena")
+		if ok {
+			sqlType = athenaType
+		}
+
+		if name == "-" || sqlType == "-" {
+			continue
 		}
 
 		if sqlType == "" {
-			sqlTypeByFieldType, ok := genSqlType(field.Type)
+			sqlTypeByFieldType, ok := f.genSqlType(field.Type())
 			if ok {
 				sqlType = sqlTypeByFieldType
 			} else {
-				log.Fatalf("no support field type: %s", types.ExprString(field.Type))
+				log.Fatalf("no support field type: %s", field.Name())
 			}
 		}
 
@@ -283,64 +292,53 @@ func genCoulmns(fields []*ast.Field) []Column {
 	return columns
 }
 
-func genSqlType(fieldType ast.Expr) (string, bool) {
-	// array
-	arrayType, ok := fieldType.(*ast.ArrayType)
-	if ok {
-		typeStr, ok := genSqlType(arrayType.Elt)
-		if !ok {
-			return "", false
-		}
-		return fmt.Sprintf("array<%s>", typeStr), true
-	}
-
-	// struct
-	ident, ok := fieldType.(*ast.Ident)
-	if ok && ident.Obj != nil {
-		typeSpec, ok := ident.Obj.Decl.(*ast.TypeSpec)
-
-		if !ok {
-			return "", false
-		}
-
-		structType, ok := typeSpec.Type.(*ast.StructType)
-
-		if !ok {
-			return "", false
-		}
-
-		columns := genCoulmns(structType.Fields.List)
-
-		columnStrs := make([]string, 0, len(columns))
-
-		for _, column := range columns {
-			columnStrs = append(columnStrs, fmt.Sprintf("%s: %s", column.Name, column.Type))
-		}
-
-		return fmt.Sprintf("struct<%s>", strings.Join(columnStrs, ", ")), true
-	}
-	// map
-	mapType, ok := fieldType.(*ast.MapType)
-	if ok {
-		key, ok := mapType.Key.(*ast.Ident)
-		if !ok {
-			return "", false
-		}
-
-		value, ok := genSqlType(mapType.Value)
-		if !ok {
-			return "", false
-		}
-		return fmt.Sprintf("map<%s, %s>", key.Name, value), true
-	}
-
-	typeStr := types.ExprString(fieldType)
-	sqlType, ok := SQLTypeMap[typeStr]
+func (f *File) genSqlType(fieldType types.Type) (string, bool) {
+	sqlType, ok := SQLTypeMap[fieldType.String()]
 	if ok {
 		return sqlType, true
 	}
 
-	return "", false
+	switch typeKind := fieldType.(type) {
+	case *types.Slice:
+		typeStr, ok := f.genSqlType(typeKind.Elem())
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("array<%s>", typeStr), true
+	case *types.Array:
+		typeStr, ok := f.genSqlType(typeKind.Elem())
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("array<%s>", typeStr), true
+	case *types.Struct:
+		columns := f.genCoulmns(typeKind)
+		columnStrs := make([]string, 0, len(columns))
+		for _, column := range columns {
+			columnStrs = append(columnStrs, fmt.Sprintf("%s: %s", column.Name, column.Type))
+		}
+		return fmt.Sprintf("struct<%s>", strings.Join(columnStrs, ", ")), true
+	case *types.Map:
+		key, ok := f.genSqlType(typeKind.Key())
+		if !ok {
+			return "", false
+		}
+		value, ok := f.genSqlType(typeKind.Elem())
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("map<%s, %s>", key, value), true
+	case *types.Pointer:
+		typeStr, ok := f.genSqlType(typeKind.Elem())
+		if !ok {
+			return "", false
+		}
+		return typeStr, true
+	case *types.Named:
+		return f.genSqlType(fieldType.Underlying())
+	default:
+		return "", false
+	}
 }
 
 var tmplFuncs = template.FuncMap{
@@ -396,6 +394,7 @@ var SQLTypeMap = map[string]string{
 	"uint64":    "int",
 	"float32":   "float",
 	"float64":   "double",
+	"[]byte":    "string",
 	"time.Time": "timestamp",
 }
 
