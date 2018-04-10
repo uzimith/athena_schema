@@ -82,8 +82,8 @@ func main() {
 	// Write to file.
 	outputName := *output
 	if outputName == "" {
-		baseName := fmt.Sprintf("%s_athena.sql", types[0])
-		outputName = filepath.Join(dir, strings.ToLower(baseName))
+		baseName := fmt.Sprintf("%s_athena.sql", CamelToSnake(types[0]))
+		outputName = filepath.Join(dir, baseName)
 	}
 
 	err := ioutil.WriteFile(outputName, src, 0644)
