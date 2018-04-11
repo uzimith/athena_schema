@@ -22,10 +22,13 @@ import (
 )
 
 var (
-	typeNames     = flag.String("type", "", "comma-separated list of type names; must be set")
-	tableNameList = flag.String("table", "", "comma-separated list of table names; If table name is empty, default name is used.")
-	output        = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
-	templatePath  = flag.String("template", ".", "template file: {templatePath}/template.tpl")
+	typeNames        = flag.String("type", "", "comma-separated list of type names; must be set")
+	tableNameList    = flag.String("table", "", "comma-separated list of table names; If table name is empty, default name is used.")
+	folderNameList   = flag.String("folder", "", "comma-separated list of folder names; If folder name is empty, table name is used.")
+	folderNamePrefix = flag.String("prefix", "", "folder name prefix")
+	folderNameSuffix = flag.String("suffix", "", "folder name suffix")
+	output           = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
+	templatePath     = flag.String("template", ".", "template file: {templatePath}/template.tpl")
 )
 
 func Usage() {
@@ -52,10 +55,25 @@ func main() {
 	}
 
 	types := strings.Split(*typeNames, ",")
-	tablesNames := make([]string, len(types))
+	tableNames := make([]string, len(types))
 	if tableNameList != nil {
 		list := strings.Split(*tableNameList, ",")
-		copy(tablesNames, list)
+		copy(tableNames, list)
+	}
+	folderNames := make([]string, len(types))
+	if folderNameList != nil {
+		list := strings.Split(*folderNameList, ",")
+		copy(folderNames, list)
+	}
+
+	folderNamePrefixStr := ""
+	if folderNamePrefix != nil {
+		folderNamePrefixStr = *folderNamePrefix
+	}
+
+	folderNameSuffixStr := ""
+	if folderNameSuffix != nil {
+		folderNameSuffixStr = *folderNameSuffix
 	}
 
 	// We accept either one directory or a list of files. Which do we have?
@@ -78,12 +96,14 @@ func main() {
 		g.parsePackageFiles(args)
 	}
 
-	for _, typeName := range types {
-		g.generate(typeName)
+	for i, typeName := range types {
+		tableName := tableNames[i]
+		folderName := folderNames[i]
+		g.generate(typeName, tableName, folderName)
 	}
 
 	// Format the output.
-	src := g.format(*templatePath)
+	src := g.format(*templatePath, folderNamePrefixStr, folderNameSuffixStr)
 
 	// Write to file.
 	outputName := *output
@@ -126,6 +146,7 @@ type Tmpl struct {
 	CmdLog           string
 	PackageName      string
 	FolderNamePrefix string
+	FolderNameSuffix string
 	Tables           []Table
 }
 
@@ -142,8 +163,10 @@ type File struct {
 	ast *ast.File
 
 	// state for each type
-	typeName string
-	tables   []Table
+	typeName   string
+	tableName  string
+	folderName string
+	tables     []Table
 }
 
 func (g *Generator) parsePackageDir(directory string) {
@@ -230,10 +253,12 @@ func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
 	pkg.typesPkg = typesPkg
 }
 
-func (g *Generator) generate(typeName string) {
+func (g *Generator) generate(typeName string, tableName string, folderName string) {
 	for _, file := range g.pkg.files {
 		// pass state to file
 		file.typeName = typeName
+		file.tableName = tableName
+		file.folderName = folderName
 		file.tables = nil
 		if file.ast != nil {
 			ast.Inspect(file.ast, file.createTable)
@@ -269,9 +294,20 @@ func (f *File) createTable(node ast.Node) bool {
 
 		columns := f.genCoulmns(structType)
 
+		tableName := f.tableName
+		if tableName == "" {
+			tableName = CamelToSnake(structName)
+		}
+
+		folderName := f.folderName
+		if folderName == "" {
+			folderName = tableName
+		}
+
 		table := Table{
-			TableName: CamelToSnake(structName),
-			Columns:   columns,
+			TableName:  tableName,
+			FolderName: folderName,
+			Columns:    columns,
 		}
 		f.tables = append(f.tables, table)
 	}
@@ -374,7 +410,7 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
-func (g *Generator) format(templatePath string) []byte {
+func (g *Generator) format(templatePath string, folderNamePrefix string, folderNameSuffix string) []byte {
 	templateFile := fmt.Sprintf("%s/template.tpl", templatePath)
 	tname := filepath.Base(templateFile)
 	tmpl, err := template.New(tname).Funcs(tmplFuncs).ParseFiles(templateFile)
@@ -385,9 +421,11 @@ func (g *Generator) format(templatePath string) []byte {
 
 	newbytes := bytes.NewBufferString("")
 	t := &Tmpl{
-		CmdLog:      fmt.Sprintf("athena_schema %s", strings.Join(os.Args[1:], " ")),
-		PackageName: g.pkg.name,
-		Tables:      g.Tables,
+		CmdLog:           fmt.Sprintf("athena_schema %s", strings.Join(os.Args[1:], " ")),
+		PackageName:      g.pkg.name,
+		FolderNamePrefix: folderNamePrefix,
+		FolderNameSuffix: folderNameSuffix,
+		Tables:           g.Tables,
 	}
 
 	err = tmpl.Execute(newbytes, t)
