@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	typeNames    = flag.String("type", "", "comma-separated list of type names; must be set")
-	output       = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
-	templatePath = flag.String("template", ".", "template file: {templatePath}/template.tpl")
+	typeNames     = flag.String("type", "", "comma-separated list of type names; must be set")
+	tableNameList = flag.String("table", "", "comma-separated list of table names; If table name is empty, default name is used.")
+	output        = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
+	templatePath  = flag.String("template", ".", "template file: {templatePath}/template.tpl")
 )
 
 func Usage() {
@@ -51,6 +52,11 @@ func main() {
 	}
 
 	types := strings.Split(*typeNames, ",")
+	tablesNames := make([]string, len(types))
+	if tableNameList != nil {
+		list := strings.Split(*tableNameList, ",")
+		copy(tablesNames, list)
+	}
 
 	// We accept either one directory or a list of files. Which do we have?
 	args := flag.Args()
@@ -106,8 +112,9 @@ type Generator struct {
 }
 
 type Table struct {
-	Name    string
-	Columns []Column
+	TableName  string
+	FolderName string
+	Columns    []Column
 }
 
 type Column struct {
@@ -115,11 +122,18 @@ type Column struct {
 	Type string
 }
 
+type Tmpl struct {
+	CmdLog           string
+	PackageName      string
+	FolderNamePrefix string
+	Tables           []Table
+}
+
 type Package struct {
 	dir      string
 	name     string
-	info     *types.Info
 	files    []*File
+	info     *types.Info
 	typesPkg *types.Package
 }
 
@@ -190,7 +204,12 @@ func (g *Generator) parsePackage(directory string, names []string, text interfac
 }
 
 func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
-	config := types.Config{Importer: importer.Default(), FakeImportC: true}
+	config := types.Config{
+		IgnoreFuncBodies:         true,
+		DisableUnusedImportCheck: true,
+		Importer:                 importer.For("source", nil),
+		FakeImportC:              true,
+	}
 	pkg.info = &types.Info{
 		Types: make(map[ast.Expr]types.TypeAndValue),
 		Defs:  make(map[*ast.Ident]types.Object),
@@ -199,9 +218,13 @@ func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
 	typesPkg, err := config.Check(pkg.dir, fs, astFiles, pkg.info)
 	if err != nil {
 		if typesErr, ok := err.(types.Error); ok {
-			log.Printf("checking package: soft: %v error:%s", typesErr.Soft, typesErr.Error())
+			if typesErr.Soft {
+				log.Printf("checking package soft failed: %s", typesErr.Error())
+			} else {
+				log.Fatalf("checking package: %s", typesErr.Error())
+			}
 		} else {
-			log.Printf("checking package: %s", err.Error())
+			log.Fatalf("checking package: %s", err.Error())
 		}
 	}
 	pkg.typesPkg = typesPkg
@@ -247,8 +270,8 @@ func (f *File) createTable(node ast.Node) bool {
 		columns := f.genCoulmns(structType)
 
 		table := Table{
-			Name:    CamelToSnake(structName),
-			Columns: columns,
+			TableName: CamelToSnake(structName),
+			Columns:   columns,
 		}
 		f.tables = append(f.tables, table)
 	}
@@ -349,12 +372,6 @@ var tmplFuncs = template.FuncMap{
 	"last": func(x int, a interface{}) bool {
 		return x == reflect.ValueOf(a).Len()-1
 	},
-}
-
-type Tmpl struct {
-	CmdLog      string
-	PackageName string
-	Tables      []Table
 }
 
 func (g *Generator) format(templatePath string) []byte {
