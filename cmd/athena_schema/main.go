@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	typeNames        = flag.String("type", "", "comma-separated list of type names; must be set")
+	typeNameList     = flag.String("type", "", "comma-separated list of type names; must be set")
 	tableNameList    = flag.String("table", "", "comma-separated list of table names; If table name is empty, default name is used.")
 	folderNameList   = flag.String("folder", "", "comma-separated list of folder names; If folder name is empty, table name is used.")
 	folderNamePrefix = flag.String("prefix", "", "folder name prefix")
@@ -49,18 +49,18 @@ func main() {
 	log.SetPrefix("athena_schema: ")
 	flag.Usage = Usage
 	flag.Parse()
-	if len(*typeNames) == 0 {
+	if len(*typeNameList) == 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	types := strings.Split(*typeNames, ",")
-	tableNames := make([]string, len(types))
+	typeNames := strings.Split(*typeNameList, ",")
+	tableNames := make([]string, len(typeNames))
 	if tableNameList != nil {
 		list := strings.Split(*tableNameList, ",")
 		copy(tableNames, list)
 	}
-	folderNames := make([]string, len(types))
+	folderNames := make([]string, len(typeNames))
 	if folderNameList != nil {
 		list := strings.Split(*folderNameList, ",")
 		copy(folderNames, list)
@@ -86,8 +86,14 @@ func main() {
 	// Parse the package once.
 	var dir string
 	g := Generator{
-		Tables: make([]Table, 0, len(types)),
+		tables: make([]Table, 0, len(typeNames)),
+		info: &types.Info{
+			Types: make(map[ast.Expr]types.TypeAndValue),
+			Defs:  make(map[*ast.Ident]types.Object),
+			Uses:  make(map[*ast.Ident]types.Object),
+		},
 	}
+
 	if len(args) == 1 && isDirectory(args[0]) {
 		dir = args[0]
 		g.parsePackageDir(args[0])
@@ -96,7 +102,7 @@ func main() {
 		g.parsePackageFiles(args)
 	}
 
-	for i, typeName := range types {
+	for i, typeName := range typeNames {
 		tableName := tableNames[i]
 		folderName := folderNames[i]
 		g.generate(typeName, tableName, folderName)
@@ -108,7 +114,7 @@ func main() {
 	// Write to file.
 	outputName := *output
 	if outputName == "" {
-		baseName := fmt.Sprintf("%s_athena.sql", CamelToSnake(types[0]))
+		baseName := fmt.Sprintf("%s_athena.sql", CamelToSnake(typeNames[0]))
 		outputName = filepath.Join(dir, baseName)
 	}
 
@@ -127,8 +133,13 @@ func isDirectory(name string) bool {
 }
 
 type Generator struct {
-	pkg    *Package
-	Tables []Table
+	// for tmpl
+	tables []Table
+
+	// go/types generated values
+	info        *types.Info
+	pkg         *types.Package
+	packageName string
 }
 
 type Table struct {
@@ -148,25 +159,6 @@ type Tmpl struct {
 	FolderNamePrefix string
 	FolderNameSuffix string
 	Tables           []Table
-}
-
-type Package struct {
-	dir      string
-	name     string
-	files    []*File
-	info     *types.Info
-	typesPkg *types.Package
-}
-
-type File struct {
-	pkg *Package
-	ast *ast.File
-
-	// state for each type
-	typeName   string
-	tableName  string
-	folderName string
-	tables     []Table
 }
 
 func (g *Generator) parsePackageDir(directory string) {
@@ -198,9 +190,7 @@ func prefixDirectory(directory string, names []string) []string {
 }
 
 func (g *Generator) parsePackage(directory string, names []string, text interface{}) {
-	var files []*File
-	var astFiles []*ast.File
-	g.pkg = new(Package)
+	var files []*ast.File
 	fs := token.NewFileSet()
 	for _, name := range names {
 		if !strings.HasSuffix(name, ".go") {
@@ -210,35 +200,20 @@ func (g *Generator) parsePackage(directory string, names []string, text interfac
 		if err != nil {
 			log.Fatalf("parsing package: %s: %s", name, err)
 		}
-		astFiles = append(astFiles, parsedFile)
-		files = append(files, &File{
-			pkg: g.pkg,
-			ast: parsedFile,
-		})
+		files = append(files, parsedFile)
 	}
-	if len(astFiles) == 0 {
+	if len(files) == 0 {
 		log.Fatalf("%s: no buildable Go files", directory)
 	}
-	g.pkg.name = astFiles[0].Name.Name
-	g.pkg.files = files
-	g.pkg.dir = directory
 
-	g.pkg.check(fs, astFiles)
-}
-
-func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
+	g.packageName = files[0].Name.Name
 	config := types.Config{
-		IgnoreFuncBodies:         true,
+		IgnoreFuncBodies:         false,
 		DisableUnusedImportCheck: true,
 		Importer:                 importer.For("source", nil),
 		FakeImportC:              true,
 	}
-	pkg.info = &types.Info{
-		Types: make(map[ast.Expr]types.TypeAndValue),
-		Defs:  make(map[*ast.Ident]types.Object),
-		Uses:  make(map[*ast.Ident]types.Object),
-	}
-	typesPkg, err := config.Check(pkg.dir, fs, astFiles, pkg.info)
+	typesPkg, err := config.Check(directory, fs, files, g.info)
 	if err != nil {
 		if typesErr, ok := err.(types.Error); ok {
 			if typesErr.Soft {
@@ -250,56 +225,25 @@ func (pkg *Package) check(fs *token.FileSet, astFiles []*ast.File) {
 			log.Fatalf("checking package: %s", err.Error())
 		}
 	}
-	pkg.typesPkg = typesPkg
+	g.pkg = typesPkg
 }
 
 func (g *Generator) generate(typeName string, tableName string, folderName string) {
-	for _, file := range g.pkg.files {
-		// pass state to file
-		file.typeName = typeName
-		file.tableName = tableName
-		file.folderName = folderName
-		file.tables = nil
-		if file.ast != nil {
-			ast.Inspect(file.ast, file.createTable)
-			g.Tables = append(g.Tables, file.tables...)
-		}
-	}
-}
-
-func (f *File) createTable(node ast.Node) bool {
-	decl, ok := node.(*ast.GenDecl)
-	if !ok || decl.Tok != token.TYPE {
-		return true
-	}
-	for _, spec := range decl.Specs {
-		typeSpec, ok := spec.(*ast.TypeSpec)
-		if !ok {
-			return true
-		}
-		object := f.pkg.info.ObjectOf(typeSpec.Name)
-		if object == nil {
-			return true
-		}
-		structName := object.Name()
-		if structName != f.typeName {
-			return true
-		}
-
-		structType, ok := object.Type().Underlying().(*types.Struct)
+	if obj, ok := g.pkg.Scope().Lookup(typeName).(*types.TypeName); ok {
+		structType, _ := obj.Type().Underlying().(*types.Struct)
 
 		if !ok {
-			log.Fatalf("specifed type is not struct: %s", structName)
+			log.Fatalf("specifed type is not struct: %s", typeName)
 		}
 
-		columns := f.genCoulmns(structType)
+		columns := genCoulmns(structType)
 
-		tableName := f.tableName
+		tableName := tableName
 		if tableName == "" {
-			tableName = CamelToSnake(structName)
+			tableName = CamelToSnake(typeName)
 		}
 
-		folderName := f.folderName
+		folderName := folderName
 		if folderName == "" {
 			folderName = tableName
 		}
@@ -309,12 +253,11 @@ func (f *File) createTable(node ast.Node) bool {
 			FolderName: folderName,
 			Columns:    columns,
 		}
-		f.tables = append(f.tables, table)
+		g.tables = append(g.tables, table)
 	}
-	return false
 }
 
-func (f *File) genCoulmns(fields *types.Struct) []Column {
+func genCoulmns(fields *types.Struct) []Column {
 	columns := make([]Column, 0, fields.NumFields())
 	for i := 0; i < fields.NumFields(); i++ {
 		field := fields.Field(i)
@@ -338,7 +281,7 @@ func (f *File) genCoulmns(fields *types.Struct) []Column {
 		}
 
 		if sqlType == "" {
-			sqlTypeByFieldType, ok := f.genSqlType(field.Type())
+			sqlTypeByFieldType, ok := genSqlType(field.Type())
 			if ok {
 				sqlType = sqlTypeByFieldType
 			} else {
@@ -355,7 +298,7 @@ func (f *File) genCoulmns(fields *types.Struct) []Column {
 	return columns
 }
 
-func (f *File) genSqlType(fieldType types.Type) (string, bool) {
+func genSqlType(fieldType types.Type) (string, bool) {
 	sqlType, ok := SQLTypeMap[fieldType.String()]
 	if ok {
 		return sqlType, true
@@ -363,42 +306,42 @@ func (f *File) genSqlType(fieldType types.Type) (string, bool) {
 
 	switch typeKind := fieldType.(type) {
 	case *types.Slice:
-		typeStr, ok := f.genSqlType(typeKind.Elem())
+		typeStr, ok := genSqlType(typeKind.Elem())
 		if !ok {
 			return "", false
 		}
 		return fmt.Sprintf("array<%s>", typeStr), true
 	case *types.Array:
-		typeStr, ok := f.genSqlType(typeKind.Elem())
+		typeStr, ok := genSqlType(typeKind.Elem())
 		if !ok {
 			return "", false
 		}
 		return fmt.Sprintf("array<%s>", typeStr), true
 	case *types.Struct:
-		columns := f.genCoulmns(typeKind)
+		columns := genCoulmns(typeKind)
 		columnStrs := make([]string, 0, len(columns))
 		for _, column := range columns {
 			columnStrs = append(columnStrs, fmt.Sprintf("%s: %s", column.Name, column.Type))
 		}
 		return fmt.Sprintf("struct<%s>", strings.Join(columnStrs, ", ")), true
 	case *types.Map:
-		key, ok := f.genSqlType(typeKind.Key())
+		key, ok := genSqlType(typeKind.Key())
 		if !ok {
 			return "", false
 		}
-		value, ok := f.genSqlType(typeKind.Elem())
+		value, ok := genSqlType(typeKind.Elem())
 		if !ok {
 			return "", false
 		}
 		return fmt.Sprintf("map<%s, %s>", key, value), true
 	case *types.Pointer:
-		typeStr, ok := f.genSqlType(typeKind.Elem())
+		typeStr, ok := genSqlType(typeKind.Elem())
 		if !ok {
 			return "", false
 		}
 		return typeStr, true
 	case *types.Named:
-		return f.genSqlType(fieldType.Underlying())
+		return genSqlType(fieldType.Underlying())
 	default:
 		return "", false
 	}
@@ -422,10 +365,10 @@ func (g *Generator) format(templatePath string, folderNamePrefix string, folderN
 	newbytes := bytes.NewBufferString("")
 	t := &Tmpl{
 		CmdLog:           fmt.Sprintf("athena_schema %s", strings.Join(os.Args[1:], " ")),
-		PackageName:      g.pkg.name,
+		PackageName:      g.packageName,
 		FolderNamePrefix: folderNamePrefix,
 		FolderNameSuffix: folderNameSuffix,
-		Tables:           g.Tables,
+		Tables:           g.tables,
 	}
 
 	err = tmpl.Execute(newbytes, t)
@@ -435,6 +378,10 @@ func (g *Generator) format(templatePath string, folderNamePrefix string, folderN
 	}
 
 	tplcontent, err := ioutil.ReadAll(newbytes)
+
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	return tplcontent
 }
