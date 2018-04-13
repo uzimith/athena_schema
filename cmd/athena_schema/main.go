@@ -105,7 +105,11 @@ func main() {
 	for i, typeName := range typeNames {
 		tableName := tableNames[i]
 		folderName := folderNames[i]
-		g.generate(typeName, tableName, folderName)
+		g.generate(&State{
+			typeName:   typeName,
+			tableName:  tableName,
+			folderName: folderName,
+		})
 	}
 
 	// Format the output.
@@ -140,6 +144,12 @@ type Generator struct {
 	info        *types.Info
 	pkg         *types.Package
 	packageName string
+}
+
+type State struct {
+	typeName   string
+	tableName  string
+	folderName string
 }
 
 type Table struct {
@@ -228,33 +238,45 @@ func (g *Generator) parsePackage(directory string, names []string, text interfac
 	g.pkg = typesPkg
 }
 
-func (g *Generator) generate(typeName string, tableName string, folderName string) {
-	if obj, ok := g.pkg.Scope().Lookup(typeName).(*types.TypeName); ok {
-		structType, _ := obj.Type().Underlying().(*types.Struct)
+func (g *Generator) generate(state *State) {
+	structType, ok := state.searchStruct(g.pkg)
 
-		if !ok {
-			log.Fatalf("specifed type is not struct: %s", typeName)
-		}
-
-		columns := genCoulmns(structType)
-
-		tableName := tableName
-		if tableName == "" {
-			tableName = CamelToSnake(typeName)
-		}
-
-		folderName := folderName
-		if folderName == "" {
-			folderName = tableName
-		}
-
-		table := Table{
-			TableName:  tableName,
-			FolderName: folderName,
-			Columns:    columns,
-		}
-		g.tables = append(g.tables, table)
+	if !ok {
+		log.Fatalf("Not found specifed name struct: %s", state.typeName)
 	}
+
+	columns := genCoulmns(structType)
+
+	if state.tableName == "" {
+		state.tableName = CamelToSnake(state.typeName)
+	}
+
+	if state.folderName == "" {
+		state.folderName = state.tableName
+	}
+
+	table := Table{
+		TableName:  state.tableName,
+		FolderName: state.folderName,
+		Columns:    columns,
+	}
+	g.tables = append(g.tables, table)
+}
+
+func (state *State) searchStruct(pkg *types.Package) (*types.Struct, bool) {
+	if object, ok := pkg.Scope().Lookup(state.typeName).(*types.TypeName); ok {
+		if structType, ok := object.Type().Underlying().(*types.Struct); ok {
+			return structType, true
+		}
+	}
+
+	for _, childPkg := range pkg.Imports() {
+		if structType, ok := state.searchStruct(childPkg); ok {
+			return structType, true
+		}
+	}
+
+	return nil, false
 }
 
 func genCoulmns(fields *types.Struct) []Column {
