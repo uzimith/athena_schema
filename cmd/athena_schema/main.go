@@ -28,6 +28,7 @@ var (
 	folderNamePrefix = flag.String("prefix", "", "folder name prefix")
 	folderNameSuffix = flag.String("suffix", "", "folder name suffix")
 	output           = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
+	stdout           = flag.Bool("O", false, "stdout flag")
 	templatePath     = flag.String("template", filepath.Join(os.Getenv("GOPATH"), "/src/github.com/uzimith/athena_schema"), "template file: {templatePath}/template.tpl")
 )
 
@@ -122,9 +123,13 @@ func main() {
 		outputName = filepath.Join(dir, baseName)
 	}
 
-	err := ioutil.WriteFile(outputName, src, 0644)
-	if err != nil {
-		log.Fatalf("writing output: %s", err)
+	if *stdout {
+		fmt.Print(string(src))
+	} else {
+		err := ioutil.WriteFile(outputName, src, 0644)
+		if err != nil {
+			log.Fatalf("writing output: %s", err)
+		}
 	}
 }
 
