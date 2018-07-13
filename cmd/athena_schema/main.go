@@ -28,7 +28,7 @@ var (
 	folderNamePrefix = flag.String("prefix", "", "folder name prefix")
 	folderNameSuffix = flag.String("suffix", "", "folder name suffix")
 	output           = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
-	templatePath     = flag.String("template", ".", "template file: {templatePath}/template.tpl")
+	templatePath     = flag.String("template", filepath.Join(os.Getenv("GOPATH"), "/src/github.com/uzimith/athena_schema"), "template file: {templatePath}/template.tpl")
 )
 
 func Usage() {
