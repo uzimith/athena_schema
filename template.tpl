@@ -8,5 +8,5 @@ CREATE EXTERNAL TABLE IF NOT EXISTS `{{.TableName}}` (
   `day` int
 )
 ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
-LOCATION 's3://bucket/{{$.FolderNamePrefix}}{{.FolderName}}{{$.FolderNameSuffix}}'
+LOCATION 's3://{{$.BucketName}}/{{$.FolderNamePrefix}}{{.FolderName}}{{$.FolderNameSuffix}}'
 ;{{end}}

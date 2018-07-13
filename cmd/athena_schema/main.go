@@ -27,6 +27,7 @@ var (
 	folderNameList   = flag.String("folder", "", "comma-separated list of folder names; If folder name is empty, table name is used.")
 	folderNamePrefix = flag.String("prefix", "", "folder name prefix")
 	folderNameSuffix = flag.String("suffix", "", "folder name suffix")
+	bucketName       = flag.String("bucket", "bucket", "bucket name")
 	output           = flag.String("output", "", "output file name; default srcdir/<type>_athena.sql")
 	stdout           = flag.Bool("O", false, "stdout flag")
 	templatePath     = flag.String("template", filepath.Join(os.Getenv("GOPATH"), "/src/github.com/uzimith/athena_schema"), "template file: {templatePath}/template.tpl")
@@ -67,16 +68,6 @@ func main() {
 		copy(folderNames, list)
 	}
 
-	folderNamePrefixStr := ""
-	if folderNamePrefix != nil {
-		folderNamePrefixStr = *folderNamePrefix
-	}
-
-	folderNameSuffixStr := ""
-	if folderNameSuffix != nil {
-		folderNameSuffixStr = *folderNameSuffix
-	}
-
 	// We accept either one directory or a list of files. Which do we have?
 	args := flag.Args()
 	if len(args) == 0 {
@@ -114,7 +105,7 @@ func main() {
 	}
 
 	// Format the output.
-	src := g.format(*templatePath, folderNamePrefixStr, folderNameSuffixStr)
+	src := g.format(*templatePath, *bucketName, *folderNamePrefix, *folderNameSuffix)
 
 	// Write to file.
 	outputName := *output
@@ -171,6 +162,7 @@ type Column struct {
 type Tmpl struct {
 	CmdLog           string
 	PackageName      string
+	BucketName       string
 	FolderNamePrefix string
 	FolderNameSuffix string
 	Tables           []Table
@@ -380,7 +372,7 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
-func (g *Generator) format(templatePath string, folderNamePrefix string, folderNameSuffix string) []byte {
+func (g *Generator) format(templatePath string, bucketName string, folderNamePrefix string, folderNameSuffix string) []byte {
 	templateFile := fmt.Sprintf("%s/template.tpl", templatePath)
 	tname := filepath.Base(templateFile)
 	tmpl, err := template.New(tname).Funcs(tmplFuncs).ParseFiles(templateFile)
@@ -393,6 +385,7 @@ func (g *Generator) format(templatePath string, folderNamePrefix string, folderN
 	t := &Tmpl{
 		CmdLog:           fmt.Sprintf("athena_schema %s", strings.Join(os.Args[1:], " ")),
 		PackageName:      g.packageName,
+		BucketName:       bucketName,
 		FolderNamePrefix: folderNamePrefix,
 		FolderNameSuffix: folderNameSuffix,
 		Tables:           g.tables,
