@@ -15,7 +15,7 @@ cd fixture
 athena_schema -type=User,Post
 ```
 
-This applicatio need a template file to run this command.
+This application need a template file in order to run this command.
 
 ```
 type Post struct {

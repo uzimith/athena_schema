@@ -3,6 +3,8 @@ package fixture
 import (
 	"net/http"
 	"time"
+
+	"github.com/uzimith/athena_schema/fixture/external"
 )
 
 //go:generate athena_schema -type=User,Post,Comment,HttpLog ..
@@ -17,12 +19,13 @@ type Comment struct {
 }
 
 type Post struct {
-	Author      User       `test:"" json:"author_info"`
-	Comments    []Comment  `json:"comments"`
-	TwoComments [2]Comment `json:"two_comments"`
-	Tags        *[]*string `json:"tags"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   string     `athena:"timestamp"`
+	Author      User            `test:"" json:"author_info"`
+	Comments    []Comment       `json:"comments"`
+	TwoComments [2]Comment      `json:"two_comments"`
+	Tags        *[]*string      `json:"tags"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   string          `athena:"timestamp"`
+	External    external.Struct `json:"external"`
 }
 
 type HttpLog struct {

@@ -17,7 +17,8 @@ CREATE EXTERNAL TABLE IF NOT EXISTS `post_log` (
   `two_comments` array<struct<text: string, author_info: struct<user_id: int, name: string>>>,
   `tags` array<string>,
   `created_at` timestamp,
-  `updated_at` timestamp
+  `updated_at` timestamp,
+  `external` struct<field: int>
 ) PARTITIONED BY (
   `year` int,
   `month` int,
